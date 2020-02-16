@@ -6,49 +6,58 @@ import geohash
 import os
 from decimal import Decimal
 
-# This python script receives the SNS message, processes the message data and then puts it into DynamoDB.
-
-
-def convert_lat_long(value, dir):
-    # convert_lat_long takes the NMEA formatted location data and converts it into decimal latitude and longitude.
-
-    deg, dec = value.split('.')
-    precision = len(dec)
-    mins = deg[-2:] + '.' + dec
-    comp = float(mins) / 60 + float(deg[:-2])
-    comp = comp if (dir is 'E' or dir is 'N') else (comp / -1)
-    return round(Decimal(str(comp)), precision)
-
-
-def get_epoch_time(timeobject, dateobject):
-    # get_epoch_time converts time data from SNS message into epoch time
-
-    return int(datetime.datetime.strptime(
-        str(dateobject["day"]) + "-" + str(dateobject["month"]) + "-" + str(dateobject["year"]) + " " + str(
-            timeobject["hour"]) + ":" + str(timeobject["minute"]) + ":" + str(timeobject["second"]),
-        '%d-%m-%Y %H:%M:%S').timestamp())
-
-
 def lambda_handler(event, context):
-    # lambda_handler is called by the SNS message - it constructs the message and puts the data into DynamoDB.
-
-    message = json.loads(event['Records'][0]['Sns']['Message'])
-    data = message["reported"]
-    time = get_epoch_time(data["fix"]["timestamp"], data["transit_data"]["datestamp"])
-    long = convert_lat_long(data["fix"]["lat"], data["fix"]["lat_dir"])
-    lat = convert_lat_long(data["fix"]["lon"], data["fix"]["lon_dir"])
-    geohash_result = geohash.encode(lat, long)
+    
     dynamodb = boto3.resource('dynamodb', region_name=os.environ['region'])
     table = dynamodb.Table(os.environ['dynamodb_table'])
-    response = table.put_item(
-        Item={
-            "device_id": message["device_id"],
-            "epoch_time": time,
-            "geohash": geohash_result,
-            "latitude": lat,
-            "longitue": long,
-            "speed": Decimal(str(data["transit_data"]["spd_over_grnd"])),
-            "course": Decimal(str(data["transit_data"]["true_course"])),
-            "altitude": Decimal(str(data["fix"]["altitude"]))
-        }
+    device_configuration = dynamodb.Table(
+        os.environ['device_configuration_table']
     )
+    
+    for record in event.get('Records'):
+        update = record.get('body')
+        
+        # Check if 'update' is a string
+        if isinstance(update, str):
+            # Change 'data' a dict if a string
+            update = json.loads(update)
+            
+        data = update.get('data')
+        topic = update.get('topic')
+        
+        device_id = ""
+        if len(topic) > 1:
+            device_id = topic.split('/')[2]
+        
+        # Get the 'active trip' from the device configuration table
+        try:
+            trip_information = device_configuration.get_item(
+                Key={
+                'device_id': device_id
+                },
+                AttributesToGet=[
+                    'trip_id',
+                ]
+            )
+            
+            trip_id = trip_response['Item']['trip_id']
+
+        except Exception as e:
+            print(e)
+            trip_id = 'none'
+        
+        geohash_result = geohash.encode(data.get('lat'), data.get('lon'))
+    
+        response = table.put_item(
+            Item={
+                "device_id":  device_id,
+                "epoch_time": data.get('t'),
+                "geohash": geohash_result,
+                "latitude": Decimal(str(data.get('lat'))),
+                "longitude": Decimal(str(data.get('lon'))),
+                "speed": Decimal(str(data.get('s'))),
+                "course": Decimal(str(data.get('c'))),
+                "altitude": Decimal(str(data.get('a'))),
+                "trip": trip_id
+            }
+        )
