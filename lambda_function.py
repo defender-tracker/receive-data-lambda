@@ -27,7 +27,7 @@ def lambda_handler(event, context):
         
         device_id = ""
         if len(topic) > 1:
-            device_id = topic.split('/')[2]
+            device_id = topic.split('/')[0]
         
         # Get the 'active trip' from the device configuration table
         try:
